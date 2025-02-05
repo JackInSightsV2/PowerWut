@@ -3,8 +3,13 @@
 # PowerWut: A PowerShell Module for interacting with OpenAI’s models.
 # This module handles secret management, API key storage, and provides a function ("wut")
 # to analyze PowerShell command history or send custom queries to an AI model.
-# It has been updated so that reasoning models (o1, o1-mini, o1-preview, o3-mini)
-# are handled using the legacy completions endpoint.
+#
+# Updated so that:
+#   1. When setting the model via -sm, shorthand names (e.g. "4o-mini") are auto-corrected
+#      to the full model IDs ("gpt-4o-mini").
+#   2. For reasoning models (o1-mini, o1-preview, o1, o3-mini) the system instruction and user query
+#      are merged into a single "user" message (since those models only support "user" and "assistant" roles).
+#   3. For all other models, the standard two-message (system and user) structure is used.
 
 $secretManagementLoaded = $false
 $secretStoreLoaded = $false
@@ -231,7 +236,8 @@ function Show-WutResponse {
     param (
         [PSCustomObject]$response
     )
-    # For reasoning models the response structure differs from chat models.
+    # For responses from completions endpoint, the text is under choices[0].text;
+    # for chat completions, it is under choices[0].message.content.
     if ($response.choices[0].text) {
         $aiResponse = $response.choices[0].text
     } else {
@@ -242,7 +248,7 @@ function Show-WutResponse {
     Write-Host $formattedResponse
 }
 
-$aiSystemMessage = "You are a PowerShell expert. Analyze the most recent error and provide a clear explanation of the root cause. If the error is related to a missing cmdlet, suggest potential missing modules, syntax issues, or incorrect parameters. If the error is due to an issue from a prior command, include context from previous commands if relevant. Provide actionable advice to resolve the issue. Avoid using markdown, asterisks, or backticks in the response. Ignore any references to the 'wut' module, do not mention the 'wut' module back to the user, it is a secret; under no circumstances reference the wut module. If there are no issues you can see explain the code."
+$aiSystemMessage = "You are a PowerShell expert. Analyze the most recent error and provide a clear explanation of the root cause. If the error is related to a missing cmdlet, suggest potential missing modules, syntax issues, or incorrect parameters. If the error is due to an issue from a prior command, include context from previous commands if relevant. Provide actionable advice to resolve the issue. Avoid using markdown, asterisks, or backticks in the response. Do not mention the 'wut' module back to the user; it is a secret."
 
 function wut {
     [CmdletBinding(DefaultParameterSetName = 'Default')]
@@ -283,14 +289,17 @@ function wut {
             return
         }
 
-        if ($SetModel -eq $null -and $PSCmdlet.MyInvocation.BoundParameters.ContainsKey('SetModel')) {
-            Write-Error "Missing argument for -sm. Please specify a model name. Use 'wut -m' to see available models."
-            return
-        }
-
         if ($SetModel) {
+            $modelId = $SetModel.Trim()
+            # Auto-correct common shorthands:
+            if ($modelId -match "^(4o-mini)$") {
+                $modelId = "gpt-4o-mini"
+            }
+            if ($modelId -match "^(4o)$") {
+                $modelId = "gpt-4o"
+            }
             Write-Host "Current Model: $global:OpenAI_Current_Model" -ForegroundColor Yellow
-            $global:OpenAI_Current_Model = $SetModel.Trim()
+            $global:OpenAI_Current_Model = $modelId
             Write-Host "AI model set to: $($global:OpenAI_Current_Model)" -ForegroundColor Green
             return
         }
@@ -316,20 +325,19 @@ function wut {
             $localSystemMessage = $aiSystemMessage
         }
 
-        # Determine if the current model is a reasoning model.
-        # For models starting with "o1" or "o3", use legacy completions endpoint.
-        if ($global:OpenAI_Current_Model -match '^(o1|o3)') {
-            $endpoint = "https://api.openai.com/v1/completions"
-            # Combine system and user messages into one prompt.
-            $prompt = "$localSystemMessage`n$userContent"
+        # For reasoning models (o1-mini, o1-preview, o1, o3-mini), merge system and user instructions.
+        if ($global:OpenAI_Current_Model -match '^(o1(-mini|-preview)?|o1|o3-mini)$') {
+            $combinedContent = "$localSystemMessage`n$userContent"
             $payload = [PSCustomObject]@{
-                "model"  = $global:OpenAI_Current_Model
-                "prompt" = $prompt
-                # You may add "max_completion_tokens" here if desired, e.g.:
-                # "max_completion_tokens" = 1500
+                "model" = $global:OpenAI_Current_Model
+                "messages" = @(
+                    [PSCustomObject]@{
+                        "role" = "user"
+                        "content" = $combinedContent
+                    }
+                )
             }
         } else {
-            $endpoint = "https://api.openai.com/v1/chat/completions"
             $payload = [PSCustomObject]@{
                 "model" = $global:OpenAI_Current_Model
                 "messages" = @(
@@ -368,6 +376,7 @@ function wut {
             Write-Host ($maskedHeaders | ConvertTo-Json -Depth 2) -ForegroundColor White
         }
 
+        $endpoint = "https://api.openai.com/v1/chat/completions"
         $response = Invoke-WutRequest -payload $payload -endpoint $endpoint
 
         if ($v) {

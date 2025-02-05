@@ -1,3 +1,11 @@
+# PowerWut.psm1
+# -------------------------------------------
+# PowerWut: A PowerShell Module for interacting with OpenAI’s models.
+# This module handles secret management, API key storage, and provides a function ("wut")
+# to analyze PowerShell command history or send custom queries to an AI model.
+# It has been updated so that reasoning models (o1, o1-mini, o1-preview, o3-mini)
+# are handled using the legacy completions endpoint.
+
 $secretManagementLoaded = $false
 $secretStoreLoaded = $false
 
@@ -42,7 +50,6 @@ if ($secretManagementLoaded -and $secretStoreLoaded) {
     Write-Host "Keys are stored securely in the Windows Credential Vault."
 }
 
-
 $global:OpenAI_API_SecretName = 'OpenAI_API_Key'
 $global:OpenAI_Default_Model = 'gpt-4o'
 $global:OpenAI_Current_Model = $global:OpenAI_Default_Model
@@ -52,7 +59,6 @@ function Set-OpenAIAPIKey {
         [Parameter(Mandatory = $true)]
         [string]$ApiKey
     )
-
     try {
         Set-Secret -Name $global:OpenAI_API_SecretName -Secret $ApiKey
     } catch {
@@ -67,7 +73,6 @@ function Get-OpenAIAPIKey {
             $apiKey = Get-Secret -Name $global:OpenAI_API_SecretName -ErrorAction SilentlyContinue
         } catch {
         }
-
         if ($null -eq $apiKey) {
             Write-Host "No API Key found. Please enter your OpenAI API Key."
             $apiKey = Read-Host "Enter OpenAI API Key"
@@ -92,45 +97,37 @@ function Get-AvailableOpenAIModels {
             Write-Error "No API key is available to send the request to OpenAI."
             return
         }
-
         $plainApiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
             [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKey)
         )
-
         $headers = @{ "Authorization" = "Bearer $plainApiKey" }
-
         if ($Verbose) {
             Write-Host "Headers:" -ForegroundColor Yellow
             $maskedHeaders = $headers.Clone()
             $maskedHeaders["Authorization"] = "Bearer [MASKED]"
             Write-Host ($maskedHeaders | Out-String) -ForegroundColor White
         }
-
         $response = Invoke-RestMethod -Uri "https://api.openai.com/v1/models" -Method GET -Headers $headers
-
         if ($Verbose) {
             Write-Host "Response:" -ForegroundColor Yellow
             Write-Host ($response | ConvertTo-Json -Depth 2) -ForegroundColor White
         }
-
         $models = $response.data
-
         # Apply filtering rules to remove unwanted models
         $filteredModels = $models |
             Where-Object {
-                $_.id -notmatch 'realtime' -and  # Remove models with 'realtime'
-                $_.id -notmatch 'dall-e' -and    # Remove models with 'dall-e'
-                $_.id -notmatch 'vision' -and    # Remove models with 'vision'
-                $_.id -notmatch 'text-embedding' -and # Remove models with 'text-embedding'
-                $_.id -notmatch 'audio' -and     # Remove models with 'audio'
-                $_.id -notmatch '\d{4}-\d{2}-\d{2}' -and # Remove models with dates (YYYY-MM-DD)
-                $_.id -notmatch 'moderation' -and # Remove models with 'moderation'
-                $_.id -notmatch 'tts' -and       # Remove models with 'tts'
-                $_.id -notmatch 'babbage' -and   # Remove models with 'babbage'
-                $_.id -notmatch 'davinci' -and   # Remove models with 'davinci'
-                $_.id -notmatch '\d{4}'          # Remove models with 4-digit numbers (e.g., 1106)
+                $_.id -notmatch 'realtime' -and  
+                $_.id -notmatch 'dall-e' -and    
+                $_.id -notmatch 'vision' -and    
+                $_.id -notmatch 'text-embedding' -and 
+                $_.id -notmatch 'audio' -and     
+                $_.id -notmatch '\d{4}-\d{2}-\d{2}' -and 
+                $_.id -notmatch 'moderation' -and 
+                $_.id -notmatch 'tts' -and       
+                $_.id -notmatch 'babbage' -and   
+                $_.id -notmatch 'davinci' -and   
+                $_.id -notmatch '\d{4}'          
             }
-
         foreach ($model in $filteredModels) {
             Write-Host $model.id -ForegroundColor Green
         }
@@ -192,7 +189,6 @@ function Show-WutHelp {
     Write-Host "    For more information, visit https://example.com/help/wut" -ForegroundColor White
 }
 
-
 function Get-WutContext {
     param (
         [int]$ContextLength = 10
@@ -215,22 +211,19 @@ function Get-WutUserQuery {
 
 function Invoke-WutRequest {
     param (
-        [PSCustomObject]$payload
+        [PSCustomObject]$payload,
+        [string]$endpoint
     )
     $apiKey = Get-OpenAIAPIKey
     if ($null -eq $apiKey) {
         Write-Error "No API key is available to send the request to OpenAI."
         return
     }
-
     $plainApiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
         [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKey)
     )
-
     $headers = @{ "Authorization" = "Bearer $plainApiKey" }
-
-    $response = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method POST -Headers $headers -Body ($payload | ConvertTo-Json -Depth 2) -ContentType 'application/json'
-
+    $response = Invoke-RestMethod -Uri $endpoint -Method POST -Headers $headers -Body ($payload | ConvertTo-Json -Depth 2) -ContentType 'application/json'
     return $response
 }
 
@@ -238,7 +231,12 @@ function Show-WutResponse {
     param (
         [PSCustomObject]$response
     )
-    $aiResponse = $response.choices[0].message.content
+    # For reasoning models the response structure differs from chat models.
+    if ($response.choices[0].text) {
+        $aiResponse = $response.choices[0].text
+    } else {
+        $aiResponse = $response.choices[0].message.content
+    }
     $formattedResponse = $aiResponse -replace '\*\*(.*?)\*\*', "$1" -replace "'''(.*?)'''", "$1"
     Write-Host "AI Response:" -ForegroundColor Cyan
     Write-Host $formattedResponse
@@ -272,7 +270,6 @@ function wut {
         [Alias("?")]
         [switch]$Help
     )
-
     try {
         if ($Help) {
             Show-WutHelp
@@ -308,33 +305,44 @@ function wut {
             $localSystemMessage = "You are a helpful cloud and programming expert."
         } else {
             $historyCommands = (Get-History | Select-Object -Last $ContextLength | ForEach-Object { $_.CommandLine }) -join " ; "
-
             if ($null -eq $historyCommands -or $historyCommands -eq "") {
                 Write-Host "No recent commands to send."
                 return
             }
-
             $userContent = "PowerShell command history: $historyCommands"
-
             if ($null -ne $q -and $q -ne "") {
                 $userContent += " Query: $q"
             }
-
             $localSystemMessage = $aiSystemMessage
         }
 
-        $payload = [PSCustomObject]@{
-            "model" = $global:OpenAI_Current_Model
-            "messages" = @(
-                [PSCustomObject]@{
-                    "role" = "system"
-                    "content" = $localSystemMessage
-                },
-                [PSCustomObject]@{
-                    "role" = "user"
-                    "content" = $userContent
-                }
-            )
+        # Determine if the current model is a reasoning model.
+        # For models starting with "o1" or "o3", use legacy completions endpoint.
+        if ($global:OpenAI_Current_Model -match '^(o1|o3)') {
+            $endpoint = "https://api.openai.com/v1/completions"
+            # Combine system and user messages into one prompt.
+            $prompt = "$localSystemMessage`n$userContent"
+            $payload = [PSCustomObject]@{
+                "model"  = $global:OpenAI_Current_Model
+                "prompt" = $prompt
+                # You may add "max_completion_tokens" here if desired, e.g.:
+                # "max_completion_tokens" = 1500
+            }
+        } else {
+            $endpoint = "https://api.openai.com/v1/chat/completions"
+            $payload = [PSCustomObject]@{
+                "model" = $global:OpenAI_Current_Model
+                "messages" = @(
+                    [PSCustomObject]@{
+                        "role"    = "system"
+                        "content" = $localSystemMessage
+                    },
+                    [PSCustomObject]@{
+                        "role"    = "user"
+                        "content" = $userContent
+                    }
+                )
+            }
         }
 
         if ($v) {
@@ -353,7 +361,6 @@ function wut {
         )
 
         $headers = @{ "Authorization" = "Bearer $plainApiKey" }
-
         if ($v) {
             $maskedHeaders = $headers.Clone()
             $maskedHeaders["Authorization"] = "Bearer [REDACTED]"
@@ -361,7 +368,7 @@ function wut {
             Write-Host ($maskedHeaders | ConvertTo-Json -Depth 2) -ForegroundColor White
         }
 
-        $response = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method POST -Headers $headers -Body ($payload | ConvertTo-Json -Depth 2) -ContentType 'application/json'
+        $response = Invoke-WutRequest -payload $payload -endpoint $endpoint
 
         if ($v) {
             Write-Host "Response from OpenAI API:" -ForegroundColor Yellow

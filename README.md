@@ -4,31 +4,6 @@ _PowerWut_ is a PowerShell module designed to interact with OpenAI’s models to
 
 ---
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation & Deployment](#installation--deployment)
-- [Usage](#usage)
-  - [Setting Up Your API Key](#setting-up-your-api-key)
-  - [Listing & Changing AI Models](#listing--changing-ai-models)
-  - [Sending Queries to OpenAI](#sending-queries-to-openai)
-  - [Getting Help](#getting-help)
-- [Detailed Explanation](#detailed-explanation)
-  - [Module & Secret Management](#module--secret-management)
-  - [API Key Handling](#api-key-handling)
-  - [Context & Query Functions](#context--query-functions)
-  - [REST API Request & Response Processing](#rest-api-request--response-processing)
-- [Security Considerations](#security-considerations)
-- [Examples](#examples)
-- [Troubleshooting](#troubleshooting)
-- [License](#license)
-- [Contributing](#contributing)
-- [Acknowledgements](#acknowledgements)
-
----
-
 ## Overview
 
 The _PowerWut_ module simplifies the process of querying OpenAI models from PowerShell. It performs the following tasks:
